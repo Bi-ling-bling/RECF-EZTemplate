@@ -46,7 +46,7 @@ namespace {
 
 pros::Motor claw_motor(7, pros::MotorGearset::green);
 // The lift motors are mounted opposite each other.
-pros::MotorGroup lift_motors({5, -6}, pros::MotorGearset::green);
+pros::MotorGroup lift_motors({5, -6}, pros::MotorGearset::blue);
 
 constexpr int claw_open_power = 40;
 constexpr int claw_intake_power = -127;  // Full reverse power.
