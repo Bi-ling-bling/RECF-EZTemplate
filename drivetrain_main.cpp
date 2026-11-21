@@ -72,8 +72,8 @@ void control_drive(pros::Controller& controller) {
 class ClawControl {
 public:
     void update(pros::Controller& controller) {
-        const bool open_tapped = controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_R1) == 1;
-        const bool intake_held = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2) == 1;
+        const bool open_tapped = controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_R2) == 1;
+        const bool intake_held = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1) == 1;
 
         if (intake_held) {
             claw_motor.move(claw_intake_power);
@@ -104,8 +104,8 @@ private:
 
 void control_lift(pros::Controller& controller) {
     constexpr int lift_speed_rpm = 95;
-    const bool up = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1);
-    const bool down = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2);
+    const bool up = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2);
+    const bool down = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1);
 
     if (up == down) {
         lift_motors.brake();
