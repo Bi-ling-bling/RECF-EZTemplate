@@ -47,7 +47,6 @@ pros::Motor claw_motor(7, pros::MotorGearset::green);
 // The lift motors are mounted opposite each other.
 pros::MotorGroup lift_motors({5, -6}, pros::MotorGearset::blue);
 
-#ifndef RECF_AUTONOMOUS_PROGRAM
 constexpr int claw_open_power = 40;
 constexpr int claw_intake_power = -127;  // Full reverse power.
 constexpr std::uint32_t claw_open_time_ms = 500;
@@ -114,7 +113,12 @@ void control_lift(pros::Controller& controller) {
         lift_motors.move_velocity(up ? lift_speed_rpm : -lift_speed_rpm);
     }
 }
-#endif
+
+void stop_motors() {
+    chassis.drive_set(0, 0);
+    claw_motor.move(0);
+    lift_motors.brake();
+}
 
 }  // namespace
 
@@ -137,42 +141,22 @@ void initialize() {
     chassis.odom_enable(false);
     chassis.opcontrol_curve_sd_initialize();
     chassis.drive_sensor_reset();
-#ifdef RECF_AUTONOMOUS_PROGRAM
     initialize_autonomous_display();
-#endif
 }
 
 void disabled() {
-    chassis.drive_set(0, 0);
-    claw_motor.move(0);
-    lift_motors.brake();
+    stop_motors();
 }
 
 void competition_initialize() {}
 
 void autonomous() {
-#ifdef RECF_AUTONOMOUS_PROGRAM
+    stop_motors();
     chassis.drive_brake_set(MOTOR_BRAKE_HOLD);
     run_autonomous_route();
-#else
-    disabled();
-#endif
 }
 
 void opcontrol() {
-#ifdef RECF_AUTONOMOUS_PROGRAM
-    // Require a fresh press after the program starts.
-    master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
-    while (true) {
-        const bool start_pressed = master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A) == 1;
-        if (start_pressed && !pros::competition::is_connected() && autonomous_movement_allowed()) {
-            autonomous();
-            // Consume any edge seen during the run before allowing another start.
-            master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
-        }
-        pros::delay(ez::util::DELAY_TIME);
-    }
-#else
     // Coast while driving so the robot rolls naturally when the sticks return
     // to center. Change to MOTOR_BRAKE_BRAKE or MOTOR_BRAKE_HOLD if preferred.
     chassis.drive_brake_set(MOTOR_BRAKE_COAST);
@@ -191,7 +175,24 @@ void opcontrol() {
     pros::Controller& mechanism_controller = master;
 #endif
 
+    // Require a fresh press after driver control begins.
+    master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
     while (true) {
+        const bool start_pressed = master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A) == 1;
+        if (start_pressed && !pros::competition::is_connected() && autonomous_movement_allowed()) {
+            claw = ClawControl{};
+#ifdef RECF_ENCODER_TUNING
+            reset_encoder_tuning();
+#endif
+            autonomous();
+            // Keep the drivetrain stopped until A is released, even if the route finished.
+            while (!pros::competition::is_connected() && autonomous_movement_allowed()) {
+                pros::delay(ez::util::DELAY_TIME);
+            }
+            chassis.drive_brake_set(MOTOR_BRAKE_COAST);
+            master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
+        }
+
         bool tuning_controls_drive = false;
 #ifdef RECF_ENCODER_TUNING
         tuning_controls_drive = update_encoder_tuning(master);
@@ -205,5 +206,4 @@ void opcontrol() {
         // Keep the EZ-Template loop timing.
         pros::delay(ez::util::DELAY_TIME);
     }
-#endif
 }
