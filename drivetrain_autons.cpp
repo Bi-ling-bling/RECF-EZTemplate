@@ -1,28 +1,20 @@
 #include "main.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <iterator>
 #include <numbers>
 #include <optional>
 #include <vector>
 
-// Mechanism actions use the same motor objects as driver control in main.cpp.
-bool prepare_autonomous_mechanisms();
-bool autonomous_grab();
-bool autonomous_score(double lift_degrees);
 bool autonomous_movement_allowed();
 
 namespace {
 
 constexpr double distance_scale = 1.0;  // Multiply by measured distance / reported distance.
 constexpr double track_width_inches = 12.0;  // Calibrate the effective wheel-center spacing.
-constexpr double backward_inches = 16.077569;
-constexpr double forward_inches = 24.69417;
-constexpr double lift_raise_motor_degrees = 90.0;  // Scoring height from the lowered start.
+constexpr double auton_distance_inches = 10.0;
 constexpr double position_tolerance_inches = 0.75;
 constexpr std::uint32_t settle_time_ms = 150;
 constexpr std::uint32_t timeout_ms = 4000;
@@ -34,7 +26,9 @@ struct DriveSettings {
 };
 
 constexpr DriveSettings straight_settings{8.0, 16.0, 45};
+#ifdef RECF_ENCODER_TUNING
 constexpr DriveSettings turn_settings{8.0, 16.0, 35};
+#endif
 
 struct WheelTravel {
     double left;
@@ -52,19 +46,6 @@ struct EncoderMove {
 };
 
 enum class MoveResult { running, settled, failed };
-enum class Step { backward, forward, left, right, score, grab };
-
-constexpr Step route[] = {
-    Step::backward, Step::left, Step::score,
-    Step::backward, Step::right, Step::forward, Step::grab,
-    Step::backward, Step::left, Step::forward, Step::score,
-    Step::backward, Step::right, Step::forward, Step::grab,
-    Step::backward, Step::left, Step::forward, Step::score,
-    Step::backward, Step::right, Step::forward, Step::grab,
-    Step::backward, Step::left, Step::forward, Step::score,
-};
-
-std::atomic<bool> mirror_selected{false};
 
 double average_encoder_ticks(const std::vector<pros::Motor>& motors) {
     double total = 0.0;
@@ -88,11 +69,6 @@ bool valid(WheelTravel position) {
 
 WheelTravel straight_target(double inches) {
     return {inches, inches};
-}
-
-WheelTravel turn_target(double degrees) {
-    const double travel = std::numbers::pi * track_width_inches * degrees / 360.0;
-    return {travel, -travel};
 }
 
 int wheel_power(ez::PID& pid, double travel, int max_power) {
@@ -177,53 +153,22 @@ bool run_encoder_move(WheelTravel target, DriveSettings settings) {
     return false;
 }
 
-bool run_step(Step step, bool mirrored) {
-    const double right_turn_degrees = mirrored ? -90.0 : 90.0;
-    switch (step) {
-        case Step::backward:
-            return run_encoder_move(straight_target(-backward_inches), straight_settings);
-        case Step::forward:
-            return run_encoder_move(straight_target(forward_inches), straight_settings);
-        case Step::left:
-            return run_encoder_move(turn_target(-right_turn_degrees), turn_settings);
-        case Step::right:
-            return run_encoder_move(turn_target(right_turn_degrees), turn_settings);
-        case Step::score:
-            return autonomous_score(lift_raise_motor_degrees);
-        case Step::grab:
-            return autonomous_grab();
-    }
-    return false;
-}
-
-void select_original() {
-    mirror_selected = false;
-    pros::lcd::set_text(0, "Auton: original (first turn left)");
-}
-
-void select_mirror() {
-    mirror_selected = true;
-    pros::lcd::set_text(0, "Auton: mirrored (first turn right)");
-}
-
 #ifdef RECF_ENCODER_TUNING
 EncoderMove tuning_move;
 bool tuning_active = false;
+
+WheelTravel turn_target(double degrees) {
+    const double travel = std::numbers::pi * track_width_inches * degrees / 360.0;
+    return {travel, -travel};
+}
 #endif
 
 }  // namespace
 
-void initialize_autonomous_selector() {
+void initialize_autonomous_display() {
     if (pros::lcd::is_initialized() || pros::lcd::initialize()) {
-        pros::lcd::register_btn0_cb(select_original);
-        pros::lcd::register_btn2_cb(select_mirror);
-        pros::lcd::set_text(1, "Left button: original   Right button: mirror");
-        if (lift_raise_motor_degrees <= 0.0) {
-            pros::lcd::set_text(2, "Auton blocked: set scoring lift height");
-        } else {
-            pros::lcd::set_text(2, "Standalone: hold controller A to run");
-        }
-        select_original();
+        pros::lcd::set_text(0, "Auton: 10 in forward, 10 in backward");
+        pros::lcd::set_text(1, "Standalone: hold controller A to run");
     }
 }
 
@@ -232,22 +177,12 @@ void run_autonomous_route() {
     if (!autonomous_movement_allowed()) {
         return;
     }
-    if (lift_raise_motor_degrees <= 0.0) {
-        std::puts("Autonomous blocked: set lift_raise_motor_degrees");
+    if (!run_encoder_move(straight_target(auton_distance_inches), straight_settings)) {
+        std::puts("Autonomous stopped on the forward move");
         return;
     }
-    if (!prepare_autonomous_mechanisms()) {
-        std::puts("Autonomous blocked: mechanism setup failed");
-        return;
-    }
-
-    const bool mirrored = mirror_selected.load();
-    for (std::size_t i = 0; i < std::size(route); ++i) {
-        if (!autonomous_movement_allowed() || !run_step(route[i], mirrored)) {
-            chassis.drive_set(0, 0);
-            std::printf("Autonomous stopped at step %u\n", static_cast<unsigned>(i + 1));
-            return;
-        }
+    if (!run_encoder_move(straight_target(-auton_distance_inches), straight_settings)) {
+        std::puts("Autonomous stopped on the backward move");
     }
 }
 

@@ -1,6 +1,5 @@
 #include "main.h"
 
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 
@@ -26,7 +25,7 @@ ez::Drive chassis(
 
 // Defined in autons.cpp. This only sets the EZ-Template PID constants.
 void default_constants();
-void initialize_autonomous_selector();
+void initialize_autonomous_display();
 void run_autonomous_route();
 
 #ifdef RECF_ENCODER_TUNING
@@ -48,16 +47,11 @@ pros::Motor claw_motor(7, pros::MotorGearset::green);
 // The lift motors are mounted opposite each other.
 pros::MotorGroup lift_motors({5, -6}, pros::MotorGearset::blue);
 
+#ifndef RECF_AUTONOMOUS_PROGRAM
 constexpr int claw_open_power = 40;
 constexpr int claw_intake_power = -127;  // Full reverse power.
 constexpr std::uint32_t claw_open_time_ms = 500;
-constexpr std::uint32_t claw_close_wait_ms = 250;
-constexpr std::uint32_t claw_intake_time_ms = 500;
-constexpr int lift_auton_speed_rpm = 45;
-constexpr double lift_position_tolerance_degrees = 8.0;
-constexpr std::uint32_t lift_timeout_ms = 3000;
 
-#ifndef RECF_AUTONOMOUS_PROGRAM
 void control_drive(pros::Controller& controller) {
     constexpr int joystick_deadband = 5;
     const int throttle = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
@@ -122,61 +116,7 @@ void control_lift(pros::Controller& controller) {
 }
 #endif
 
-bool run_claw_for(int power, std::uint32_t duration_ms) {
-    if (!autonomous_movement_allowed() || claw_motor.move(power) == PROS_ERR) {
-        return false;
-    }
-    const auto started_at = pros::millis();
-    while (autonomous_movement_allowed() && pros::millis() - started_at < duration_ms) {
-        pros::delay(ez::util::DELAY_TIME);
-    }
-    claw_motor.move(0);
-    return autonomous_movement_allowed();
-}
-
-bool move_lift_to(double target_degrees) {
-    if (!autonomous_movement_allowed() ||
-        lift_motors.move_absolute(target_degrees, lift_auton_speed_rpm) == PROS_ERR) {
-        lift_motors.brake();
-        return false;
-    }
-
-    const auto started_at = pros::millis();
-    while (autonomous_movement_allowed() && pros::millis() - started_at < lift_timeout_ms) {
-        const double left = lift_motors.get_position(0);
-        const double right = lift_motors.get_position(1);
-        if (!std::isfinite(left) || !std::isfinite(right)) {
-            break;
-        }
-        if (std::abs(target_degrees - left) <= lift_position_tolerance_degrees &&
-            std::abs(target_degrees - right) <= lift_position_tolerance_degrees) {
-            lift_motors.brake();
-            return true;
-        }
-        pros::delay(ez::util::DELAY_TIME);
-    }
-    lift_motors.brake();
-    return false;
-}
-
 }  // namespace
-
-bool prepare_autonomous_mechanisms() {
-    return claw_motor.move(0) != PROS_ERR &&
-           lift_motors.set_encoder_units_all(pros::MotorUnits::degrees) != PROS_ERR &&
-           lift_motors.tare_position_all() != PROS_ERR;
-}
-
-bool autonomous_grab() {
-    // Give the claw time to close mechanically with the motor stopped before intaking.
-    return run_claw_for(claw_open_power, claw_open_time_ms) &&
-           run_claw_for(0, claw_close_wait_ms) &&
-           run_claw_for(claw_intake_power, claw_intake_time_ms);
-}
-
-bool autonomous_score(double lift_degrees) {
-    return move_lift_to(lift_degrees) && run_claw_for(claw_open_power, claw_open_time_ms);
-}
 
 void initialize() {
     ez::ez_template_print();
@@ -198,7 +138,7 @@ void initialize() {
     chassis.opcontrol_curve_sd_initialize();
     chassis.drive_sensor_reset();
 #ifdef RECF_AUTONOMOUS_PROGRAM
-    initialize_autonomous_selector();
+    initialize_autonomous_display();
 #endif
 }
 
