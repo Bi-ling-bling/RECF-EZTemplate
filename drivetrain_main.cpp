@@ -118,6 +118,10 @@ void stop_motors() {
 
 }  // namespace
 
+void set_autonomous_claw_open(bool powered) {
+    claw_motor.move(powered ? claw_open_power : 0);
+}
+
 void initialize() {
     ez::ez_template_print();
 

@@ -1,20 +1,36 @@
 #include "main.h"
 
+#include <cstdint>
+
+#ifdef RECF_ENCODER_TUNING
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <numbers>
 #include <optional>
 #include <vector>
+#endif
 
 bool autonomous_movement_allowed();
+void set_autonomous_claw_open(bool powered);
 
 namespace {
 
+constexpr int auton_forward_power = 45;  // Motor command from -127 to 127.
+constexpr std::uint32_t auton_forward_time_ms = 1250;
+constexpr std::uint32_t auton_claw_open_time_ms = 500;
+
+bool wait_during_autonomous(std::uint32_t duration_ms) {
+    const auto started_at = pros::millis();
+    while (autonomous_movement_allowed() && pros::millis() - started_at < duration_ms) {
+        pros::delay(ez::util::DELAY_TIME);
+    }
+    return autonomous_movement_allowed();
+}
+
+#ifdef RECF_ENCODER_TUNING
 constexpr double distance_scale = 1.0;  // Multiply by measured distance / reported distance.
 constexpr double track_width_inches = 12.0;  // Calibrate the effective wheel-center spacing.
-constexpr double auton_distance_inches = 10.0;
 constexpr double position_tolerance_inches = 0.75;
 constexpr std::uint32_t settle_time_ms = 150;
 constexpr std::uint32_t timeout_ms = 4000;
@@ -26,9 +42,7 @@ struct DriveSettings {
 };
 
 constexpr DriveSettings straight_settings{8.0, 16.0, 45};
-#ifdef RECF_ENCODER_TUNING
 constexpr DriveSettings turn_settings{8.0, 16.0, 35};
-#endif
 
 struct WheelTravel {
     double left;
@@ -137,23 +151,6 @@ MoveResult update_encoder_move(EncoderMove& move) {
     return MoveResult::running;
 }
 
-bool run_encoder_move(WheelTravel target, DriveSettings settings) {
-    EncoderMove move;
-    if (!start_encoder_move(move, target, settings)) {
-        return false;
-    }
-    while (autonomous_movement_allowed()) {
-        const auto result = update_encoder_move(move);
-        if (result != MoveResult::running) {
-            return result == MoveResult::settled;
-        }
-        pros::delay(ez::util::DELAY_TIME);
-    }
-    chassis.drive_set(0, 0);
-    return false;
-}
-
-#ifdef RECF_ENCODER_TUNING
 EncoderMove tuning_move;
 bool tuning_active = false;
 
@@ -167,23 +164,26 @@ WheelTravel turn_target(double degrees) {
 
 void initialize_autonomous_display() {
     if (pros::lcd::is_initialized() || pros::lcd::initialize()) {
-        pros::lcd::set_text(0, "Auton: 10 in forward, 10 in backward");
+        pros::lcd::set_text(0, "Auton: timed drive and pin drop");
         pros::lcd::set_text(1, "Starts during competition autonomous");
     }
 }
 
 void run_autonomous_route() {
-    chassis.drive_set(0, 0);
     if (!autonomous_movement_allowed()) {
         return;
     }
-    if (!run_encoder_move(straight_target(auton_distance_inches), straight_settings)) {
-        std::puts("Autonomous stopped on the forward move");
+
+    chassis.drive_set(auton_forward_power, auton_forward_power);
+    const bool forward_completed = wait_during_autonomous(auton_forward_time_ms);
+    chassis.drive_set(0, 0);
+    if (!forward_completed || !autonomous_movement_allowed()) {
         return;
     }
-    if (!run_encoder_move(straight_target(-auton_distance_inches), straight_settings)) {
-        std::puts("Autonomous stopped on the backward move");
-    }
+
+    set_autonomous_claw_open(true);
+    wait_during_autonomous(auton_claw_open_time_ms);
+    set_autonomous_claw_open(false);
 }
 
 #ifdef RECF_ENCODER_TUNING
