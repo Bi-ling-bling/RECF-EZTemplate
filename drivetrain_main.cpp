@@ -62,7 +62,7 @@ void initialize() {
 
     lift_motors.set_brake_mode_all(pros::MotorBrake::hold);
 
-    // Tank-drive controller setup.
+    // Split arcade drive controller setup.
     // A curve value of 0.0 gives a linear joystick response.
     chassis.opcontrol_curve_buttons_toggle(false);
     chassis.opcontrol_curve_default_set(0.0, 0.0);
@@ -103,10 +103,8 @@ void opcontrol() {
 #endif
 
     while (true) {
-        // Tank drive:
-        // Left joystick controls the left side.
-        // Right joystick controls the right side.
-        chassis.opcontrol_tank();
+        // Left stick up/down drives forward/backward. Right stick left/right steers.
+        chassis.opcontrol_arcade_standard(ez::SPLIT);
         control_claw(mechanism_controller);
         control_lift(mechanism_controller);
 
