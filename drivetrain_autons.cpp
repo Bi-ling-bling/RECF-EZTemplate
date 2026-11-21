@@ -168,7 +168,7 @@ WheelTravel turn_target(double degrees) {
 void initialize_autonomous_display() {
     if (pros::lcd::is_initialized() || pros::lcd::initialize()) {
         pros::lcd::set_text(0, "Auton: 10 in forward, 10 in backward");
-        pros::lcd::set_text(1, "Standalone: hold controller A to run");
+        pros::lcd::set_text(1, "Starts during competition autonomous");
     }
 }
 

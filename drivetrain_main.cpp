@@ -34,11 +34,7 @@ bool update_encoder_tuning(pros::Controller& controller);
 #endif
 
 bool autonomous_movement_allowed() {
-    if (pros::competition::is_disabled()) {
-        return false;
-    }
-    return pros::competition::is_autonomous() ||
-           (!pros::competition::is_connected() && master.get_digital(pros::E_CONTROLLER_DIGITAL_A) == 1);
+    return pros::competition::is_autonomous() && !pros::competition::is_disabled();
 }
 
 namespace {
@@ -175,24 +171,7 @@ void opcontrol() {
     pros::Controller& mechanism_controller = master;
 #endif
 
-    // Require a fresh press after driver control begins.
-    master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
     while (true) {
-        const bool start_pressed = master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A) == 1;
-        if (start_pressed && !pros::competition::is_connected() && autonomous_movement_allowed()) {
-            claw = ClawControl{};
-#ifdef RECF_ENCODER_TUNING
-            reset_encoder_tuning();
-#endif
-            autonomous();
-            // Keep the drivetrain stopped until A is released, even if the route finished.
-            while (!pros::competition::is_connected() && autonomous_movement_allowed()) {
-                pros::delay(ez::util::DELAY_TIME);
-            }
-            chassis.drive_brake_set(MOTOR_BRAKE_COAST);
-            master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
-        }
-
         bool tuning_controls_drive = false;
 #ifdef RECF_ENCODER_TUNING
         tuning_controls_drive = update_encoder_tuning(master);
