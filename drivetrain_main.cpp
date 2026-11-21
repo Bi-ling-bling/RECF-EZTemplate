@@ -1,5 +1,6 @@
 #include "main.h"
 
+#include <cstdint>
 #include <cstdlib>
 
 // ------------------------------------------------------------
@@ -50,27 +51,50 @@ void control_drive(pros::Controller& controller) {
     }
 }
 
-void control_claw(pros::Controller& controller) {
-    constexpr int claw_power = 40;  // Motor commands range from -127 to 127.
-    const bool open = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1);
-    const bool close = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2);
+class ClawControl {
+public:
+    void update(pros::Controller& controller) {
+        constexpr int claw_power = 40;  // Motor commands range from -127 to 127.
+        constexpr std::uint32_t open_time_ms = 500;
+        const bool open_tapped = controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_R1) == 1;
+        const bool intake_held = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2) == 1;
 
-    if (open == close) {
-        claw_motor.move(0);
-    } else {
-        claw_motor.move(open ? claw_power : -claw_power);
+        if (intake_held) {
+            claw_motor.move(-claw_power);
+            movement = Movement::intaking;
+            return;
+        }
+
+        const std::uint32_t now = pros::millis();
+        if (movement == Movement::intaking ||
+            (movement == Movement::opening && now - opening_started_at >= open_time_ms)) {
+            claw_motor.move(0);
+            movement = Movement::idle;
+        }
+
+        if (open_tapped && movement == Movement::idle) {
+            claw_motor.move(claw_power);
+            opening_started_at = now;
+            movement = Movement::opening;
+        }
     }
-}
+
+private:
+    enum class Movement { idle, opening, intaking };
+
+    Movement movement = Movement::idle;
+    std::uint32_t opening_started_at = 0;
+};
 
 void control_lift(pros::Controller& controller) {
-    constexpr int lift_power = 60;
+    constexpr int lift_speed_rpm = 95;
     const bool up = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1);
     const bool down = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2);
 
     if (up == down) {
         lift_motors.brake();
     } else {
-        lift_motors.move(up ? lift_power : -lift_power);
+        lift_motors.move_velocity(up ? lift_speed_rpm : -lift_speed_rpm);
     }
 }
 
@@ -114,6 +138,8 @@ void opcontrol() {
     // to center. Change to MOTOR_BRAKE_BRAKE or MOTOR_BRAKE_HOLD if preferred.
     chassis.drive_brake_set(MOTOR_BRAKE_COAST);
     chassis.opcontrol_drive_sensors_reset();
+    claw_motor.move(0);
+    ClawControl claw;
 
     // Build with -DRECF_TWO_CONTROLLERS to put the mechanisms on the partner controller.
 #ifdef RECF_TWO_CONTROLLERS
@@ -124,7 +150,7 @@ void opcontrol() {
 
     while (true) {
         control_drive(master);
-        control_claw(mechanism_controller);
+        claw.update(mechanism_controller);
         control_lift(mechanism_controller);
 
         // Keep the EZ-Template loop timing.
