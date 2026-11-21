@@ -1,5 +1,7 @@
 #include "main.h"
 
+#include <cstdlib>
+
 // ------------------------------------------------------------
 // DRIVE TRAIN CONFIGURATION
 // Four drive motors total: two on the left and two on the right.
@@ -27,6 +29,26 @@ namespace {
 
 pros::Motor claw_motor(7, pros::MotorGearset::green);
 pros::MotorGroup lift_motors({5, 6}, pros::MotorGearset::green);
+
+void control_drive(pros::Controller& controller) {
+    constexpr int joystick_deadband = 5;
+    const int throttle = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+    const int turn = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+
+    if (throttle == PROS_ERR || turn == PROS_ERR) {
+        chassis.drive_set(0, 0);
+    } else if (turn < -joystick_deadband) {
+        // Back up only the inside side to pivot around the other side.
+        chassis.drive_set(static_cast<int>(chassis.opcontrol_curve_right(turn)), 0);
+    } else if (turn > joystick_deadband) {
+        chassis.drive_set(0, static_cast<int>(chassis.opcontrol_curve_right(-turn)));
+    } else {
+        const int power = std::abs(throttle) <= joystick_deadband
+            ? 0
+            : static_cast<int>(chassis.opcontrol_curve_left(throttle));
+        chassis.drive_set(power, power);
+    }
+}
 
 void control_claw(pros::Controller& controller) {
     constexpr int claw_power = 40;  // Motor commands range from -127 to 127.
@@ -62,11 +84,8 @@ void initialize() {
 
     lift_motors.set_brake_mode_all(pros::MotorBrake::hold);
 
-    // Split arcade drive controller setup.
     // A curve value of 0.0 gives a linear joystick response.
-    chassis.opcontrol_curve_buttons_toggle(false);
     chassis.opcontrol_curve_default_set(0.0, 0.0);
-    chassis.opcontrol_drive_activebrake_set(0.0);
 
     // Load the current starting PID values.
     // These can be tuned later.
@@ -94,6 +113,7 @@ void opcontrol() {
     // Coast while driving so the robot rolls naturally when the sticks return
     // to center. Change to MOTOR_BRAKE_BRAKE or MOTOR_BRAKE_HOLD if preferred.
     chassis.drive_brake_set(MOTOR_BRAKE_COAST);
+    chassis.opcontrol_drive_sensors_reset();
 
     // Build with -DRECF_TWO_CONTROLLERS to put the mechanisms on the partner controller.
 #ifdef RECF_TWO_CONTROLLERS
@@ -103,8 +123,7 @@ void opcontrol() {
 #endif
 
     while (true) {
-        // Left stick up/down drives forward/backward. Right stick left/right steers.
-        chassis.opcontrol_arcade_standard(ez::SPLIT);
+        control_drive(master);
         control_claw(mechanism_controller);
         control_lift(mechanism_controller);
 
