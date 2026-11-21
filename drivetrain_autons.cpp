@@ -14,6 +14,7 @@
 bool prepare_autonomous_mechanisms();
 bool autonomous_grab();
 bool autonomous_score(double lift_degrees);
+bool autonomous_movement_allowed();
 
 namespace {
 
@@ -165,7 +166,7 @@ bool run_encoder_move(WheelTravel target, DriveSettings settings) {
     if (!start_encoder_move(move, target, settings)) {
         return false;
     }
-    while (!pros::competition::is_disabled()) {
+    while (autonomous_movement_allowed()) {
         const auto result = update_encoder_move(move);
         if (result != MoveResult::running) {
             return result == MoveResult::settled;
@@ -219,6 +220,8 @@ void initialize_autonomous_selector() {
         pros::lcd::set_text(1, "Left button: original   Right button: mirror");
         if (lift_raise_motor_degrees <= 0.0) {
             pros::lcd::set_text(2, "Auton blocked: set scoring lift height");
+        } else {
+            pros::lcd::set_text(2, "Standalone: hold controller A to run");
         }
         select_original();
     }
@@ -226,6 +229,9 @@ void initialize_autonomous_selector() {
 
 void run_autonomous_route() {
     chassis.drive_set(0, 0);
+    if (!autonomous_movement_allowed()) {
+        return;
+    }
     if (lift_raise_motor_degrees <= 0.0) {
         std::puts("Autonomous blocked: set lift_raise_motor_degrees");
         return;
@@ -237,7 +243,7 @@ void run_autonomous_route() {
 
     const bool mirrored = mirror_selected.load();
     for (std::size_t i = 0; i < std::size(route); ++i) {
-        if (pros::competition::is_disabled() || !run_step(route[i], mirrored)) {
+        if (!autonomous_movement_allowed() || !run_step(route[i], mirrored)) {
             chassis.drive_set(0, 0);
             std::printf("Autonomous stopped at step %u\n", static_cast<unsigned>(i + 1));
             return;

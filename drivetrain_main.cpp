@@ -34,12 +34,22 @@ void reset_encoder_tuning();
 bool update_encoder_tuning(pros::Controller& controller);
 #endif
 
+bool autonomous_movement_allowed() {
+    if (pros::competition::is_disabled()) {
+        return false;
+    }
+    return pros::competition::is_autonomous() ||
+           (!pros::competition::is_connected() && master.get_digital(pros::E_CONTROLLER_DIGITAL_A) == 1);
+}
+
 namespace {
 
 pros::Motor claw_motor(7, pros::MotorGearset::green);
-pros::MotorGroup lift_motors({5, 6}, pros::MotorGearset::green);
+// The lift motors are mounted opposite each other.
+pros::MotorGroup lift_motors({5, -6}, pros::MotorGearset::green);
 
-constexpr int claw_power = 40;  // Motor commands range from -127 to 127.
+constexpr int claw_open_power = 40;
+constexpr int claw_intake_power = -127;  // Full reverse power.
 constexpr std::uint32_t claw_open_time_ms = 500;
 constexpr std::uint32_t claw_close_wait_ms = 250;
 constexpr std::uint32_t claw_intake_time_ms = 500;
@@ -47,6 +57,7 @@ constexpr int lift_auton_speed_rpm = 45;
 constexpr double lift_position_tolerance_degrees = 8.0;
 constexpr std::uint32_t lift_timeout_ms = 3000;
 
+#ifndef RECF_AUTONOMOUS_PROGRAM
 void control_drive(pros::Controller& controller) {
     constexpr int joystick_deadband = 5;
     const int throttle = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
@@ -54,11 +65,9 @@ void control_drive(pros::Controller& controller) {
 
     if (throttle == PROS_ERR || turn == PROS_ERR) {
         chassis.drive_set(0, 0);
-    } else if (turn < -joystick_deadband) {
-        // Back up only the inside side to pivot around the other side.
-        chassis.drive_set(static_cast<int>(chassis.opcontrol_curve_right(turn)), 0);
-    } else if (turn > joystick_deadband) {
-        chassis.drive_set(0, static_cast<int>(chassis.opcontrol_curve_right(-turn)));
+    } else if (std::abs(turn) > joystick_deadband) {
+        const int power = static_cast<int>(chassis.opcontrol_curve_right(turn));
+        chassis.drive_set(-power, power);
     } else {
         const int power = std::abs(throttle) <= joystick_deadband
             ? 0
@@ -74,7 +83,7 @@ public:
         const bool intake_held = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2) == 1;
 
         if (intake_held) {
-            claw_motor.move(-claw_power);
+            claw_motor.move(claw_intake_power);
             movement = Movement::intaking;
             return;
         }
@@ -87,7 +96,7 @@ public:
         }
 
         if (open_tapped && movement == Movement::idle) {
-            claw_motor.move(claw_power);
+            claw_motor.move(claw_open_power);
             opening_started_at = now;
             movement = Movement::opening;
         }
@@ -111,28 +120,29 @@ void control_lift(pros::Controller& controller) {
         lift_motors.move_velocity(up ? lift_speed_rpm : -lift_speed_rpm);
     }
 }
+#endif
 
 bool run_claw_for(int power, std::uint32_t duration_ms) {
-    if (pros::competition::is_disabled() || claw_motor.move(power) == PROS_ERR) {
+    if (!autonomous_movement_allowed() || claw_motor.move(power) == PROS_ERR) {
         return false;
     }
     const auto started_at = pros::millis();
-    while (!pros::competition::is_disabled() && pros::millis() - started_at < duration_ms) {
+    while (autonomous_movement_allowed() && pros::millis() - started_at < duration_ms) {
         pros::delay(ez::util::DELAY_TIME);
     }
     claw_motor.move(0);
-    return !pros::competition::is_disabled();
+    return autonomous_movement_allowed();
 }
 
 bool move_lift_to(double target_degrees) {
-    if (pros::competition::is_disabled() ||
+    if (!autonomous_movement_allowed() ||
         lift_motors.move_absolute(target_degrees, lift_auton_speed_rpm) == PROS_ERR) {
         lift_motors.brake();
         return false;
     }
 
     const auto started_at = pros::millis();
-    while (!pros::competition::is_disabled() && pros::millis() - started_at < lift_timeout_ms) {
+    while (autonomous_movement_allowed() && pros::millis() - started_at < lift_timeout_ms) {
         const double left = lift_motors.get_position(0);
         const double right = lift_motors.get_position(1);
         if (!std::isfinite(left) || !std::isfinite(right)) {
@@ -159,13 +169,13 @@ bool prepare_autonomous_mechanisms() {
 
 bool autonomous_grab() {
     // Give the claw time to close mechanically with the motor stopped before intaking.
-    return run_claw_for(claw_power, claw_open_time_ms) &&
+    return run_claw_for(claw_open_power, claw_open_time_ms) &&
            run_claw_for(0, claw_close_wait_ms) &&
-           run_claw_for(-claw_power, claw_intake_time_ms);
+           run_claw_for(claw_intake_power, claw_intake_time_ms);
 }
 
 bool autonomous_score(double lift_degrees) {
-    return move_lift_to(lift_degrees) && run_claw_for(claw_power, claw_open_time_ms);
+    return move_lift_to(lift_degrees) && run_claw_for(claw_open_power, claw_open_time_ms);
 }
 
 void initialize() {
@@ -187,7 +197,9 @@ void initialize() {
     chassis.odom_enable(false);
     chassis.opcontrol_curve_sd_initialize();
     chassis.drive_sensor_reset();
+#ifdef RECF_AUTONOMOUS_PROGRAM
     initialize_autonomous_selector();
+#endif
 }
 
 void disabled() {
@@ -199,11 +211,28 @@ void disabled() {
 void competition_initialize() {}
 
 void autonomous() {
+#ifdef RECF_AUTONOMOUS_PROGRAM
     chassis.drive_brake_set(MOTOR_BRAKE_HOLD);
     run_autonomous_route();
+#else
+    disabled();
+#endif
 }
 
 void opcontrol() {
+#ifdef RECF_AUTONOMOUS_PROGRAM
+    // Require a fresh press after the program starts.
+    master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
+    while (true) {
+        const bool start_pressed = master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A) == 1;
+        if (start_pressed && !pros::competition::is_connected() && autonomous_movement_allowed()) {
+            autonomous();
+            // Consume any edge seen during the run before allowing another start.
+            master.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_A);
+        }
+        pros::delay(ez::util::DELAY_TIME);
+    }
+#else
     // Coast while driving so the robot rolls naturally when the sticks return
     // to center. Change to MOTOR_BRAKE_BRAKE or MOTOR_BRAKE_HOLD if preferred.
     chassis.drive_brake_set(MOTOR_BRAKE_COAST);
@@ -236,4 +265,5 @@ void opcontrol() {
         // Keep the EZ-Template loop timing.
         pros::delay(ez::util::DELAY_TIME);
     }
+#endif
 }
